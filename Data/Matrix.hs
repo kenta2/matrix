@@ -56,6 +56,7 @@ module Data.Matrix (
   , switchCols
     -- * Decompositions
   , luDecomp , luDecompUnsafe
+  , luDecompWithMag
   , luDecomp', luDecompUnsafe'
   , cholDecomp
     -- * Properties
@@ -1023,27 +1024,32 @@ switchCols c1 c2 (M n m ro co w vs) = M n m ro co w $ V.modify (\mv -> do
 -- > luDecomp ( 2 0 2 ) = ( ( 0 0  2 ) , (   0 1 1 ) , ( 0 1 0 ) , 1 )
 --
 --   'Nothing' is returned if no LU decomposition exists.
+
 luDecomp :: (Ord a, Fractional a) => Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
-luDecomp a = recLUDecomp a i i 1 1 n
+luDecomp = luDecompWithMag abs
+
+luDecompWithMag :: (Ord m, Eq a, Fractional a) => (a -> m) -> Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
+luDecompWithMag getmagnitude a = recLUDecomp getmagnitude a i i 1 1 n
  where
   i = identity $ nrows a
   n = min (nrows a) (ncols a)
 
-recLUDecomp ::  (Ord a, Fractional a)
-            =>  Matrix a -- ^ U
+recLUDecomp ::  (Ord m, Eq a, Fractional a)
+            =>  (a -> m)
+            ->  Matrix a -- ^ U
             ->  Matrix a -- ^ L
             ->  Matrix a -- ^ P
             ->  a        -- ^ d
             ->  Int      -- ^ Current row
             ->  Int      -- ^ Total rows
             -> Maybe (Matrix a,Matrix a,Matrix a,a)
-recLUDecomp u l p d k n =
+recLUDecomp getmagnitude u l p d k n =
     if k > n then Just (u,l,p,d)
     else if ukk == 0 then Nothing
-                     else recLUDecomp u'' l'' p' d' (k+1) n
+                     else recLUDecomp getmagnitude u'' l'' p' d' (k+1) n
  where
   -- Pivot strategy: maximum value in absolute value below the current row.
-  i  = maximumBy (\x y -> compare (abs $ u ! (x,k)) (abs $ u ! (y,k))) [ k .. n ]
+  i  = maximumBy (\x y -> compare (getmagnitude $ u ! (x,k)) (getmagnitude $ u ! (y,k))) [ k .. n ]
   -- Switching to place pivot in current row.
   u' = switchRows k i u
   l' = let lw = vcols l
