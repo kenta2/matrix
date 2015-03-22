@@ -58,6 +58,7 @@ module Data.Matrix (
   , luDecomp , luDecompUnsafe
   , luDecompWithMag
   , luDecomp', luDecompUnsafe'
+  , luDecompWithMag'
   , cholDecomp
     -- * Properties
   , trace , diagProd
@@ -1029,13 +1030,13 @@ luDecomp :: (Ord a, Fractional a) => Matrix a -> Maybe (Matrix a,Matrix a,Matrix
 luDecomp = luDecompWithMag abs
 
 luDecompWithMag :: (Ord m, Eq a, Fractional a) => (a -> m) -> Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
-luDecompWithMag getmagnitude a = recLUDecomp getmagnitude a i i 1 1 n
+luDecompWithMag getMagnitude a = recLUDecomp getMagnitude a i i 1 1 n
  where
   i = identity $ nrows a
   n = min (nrows a) (ncols a)
 
 recLUDecomp ::  (Ord m, Eq a, Fractional a)
-            =>  (a -> m)
+            =>  (a -> m) -- ^ getMagnitude
             ->  Matrix a -- ^ U
             ->  Matrix a -- ^ L
             ->  Matrix a -- ^ P
@@ -1043,13 +1044,13 @@ recLUDecomp ::  (Ord m, Eq a, Fractional a)
             ->  Int      -- ^ Current row
             ->  Int      -- ^ Total rows
             -> Maybe (Matrix a,Matrix a,Matrix a,a)
-recLUDecomp getmagnitude u l p d k n =
+recLUDecomp getMagnitude u l p d k n =
     if k > n then Just (u,l,p,d)
     else if ukk == 0 then Nothing
-                     else recLUDecomp getmagnitude u'' l'' p' d' (k+1) n
+                     else recLUDecomp getMagnitude u'' l'' p' d' (k+1) n
  where
   -- Pivot strategy: maximum value in absolute value below the current row.
-  i  = maximumBy (\x y -> compare (getmagnitude $ u ! (x,k)) (getmagnitude $ u ! (y,k))) [ k .. n ]
+  i  = maximumBy (\x y -> compare (getMagnitude $ u ! (x,k)) (getMagnitude $ u ! (y,k))) [ k .. n ]
   -- Switching to place pivot in current row.
   u' = switchRows k i u
   l' = let lw = vcols l
@@ -1110,7 +1111,10 @@ luDecompUnsafe m = case luDecomp m of
 --
 --   'Nothing' is returned if no LU decomposition exists.
 luDecomp' :: (Ord a, Fractional a) => Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,Matrix a,a,a)
-luDecomp' a = recLUDecomp' a i i (identity $ ncols a) 1 1 1 n
+luDecomp' = luDecompWithMag' abs;
+
+luDecompWithMag' :: (Ord m, Eq a, Fractional a) => (a -> m) -> Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,Matrix a,a,a)
+luDecompWithMag' getMagnitude a = recLUDecomp' getMagnitude a i i (identity $ ncols a) 1 1 1 n
  where
   i = identity $ nrows a
   n = min (nrows a) (ncols a)
@@ -1121,8 +1125,9 @@ luDecompUnsafe' m = case luDecomp' m of
   Just x -> x
   _ -> error "luDecompUnsafe' of singular matrix."
 
-recLUDecomp' ::  (Ord a, Fractional a)
-            =>  Matrix a -- ^ U
+recLUDecomp' :: (Ord m, Eq a, Fractional a)
+            =>  (a -> m) -- ^ getMagnitude
+            ->  Matrix a -- ^ U
             ->  Matrix a -- ^ L
             ->  Matrix a -- ^ P
             ->  Matrix a -- ^ Q
@@ -1131,15 +1136,15 @@ recLUDecomp' ::  (Ord a, Fractional a)
             ->  Int      -- ^ Current row
             ->  Int      -- ^ Total rows
             ->  Maybe (Matrix a,Matrix a,Matrix a,Matrix a,a,a)
-recLUDecomp' u l p q d e k n =
+recLUDecomp' getMagnitude u l p q d e k n =
     if k > n || u'' ! (k, k) == 0
     then Just (u,l,p,q,d,e)
     else if ukk == 0
             then Nothing
-            else recLUDecomp' u'' l'' p' q' d' e' (k+1) n
+            else recLUDecomp' getMagnitude u'' l'' p' q' d' e' (k+1) n
  where
   -- Pivot strategy: maximum value in absolute value below the current row & col.
-  (i, j) = maximumBy (comparing (\(i0, j0) -> abs $ u ! (i0,j0)))
+  (i, j) = maximumBy (comparing (\(i0, j0) -> getMagnitude $ u ! (i0,j0)))
            [ (i0, j0) | i0 <- [k .. nrows u], j0 <- [k .. ncols u] ]
   -- Switching to place pivot in current row.
   u' = switchCols k j $ switchRows k i u
