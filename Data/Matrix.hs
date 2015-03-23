@@ -65,14 +65,15 @@ module Data.Matrix (
     -- ** Determinants
   , detLaplace
   , detLU
+  , invert
   ) where
 
 -- Classes
-import Control.DeepSeq
-import Control.Monad (forM_)
+import Control.DeepSeq(NFData,deepseq,rnf)
+import Control.Monad (forM_, MonadPlus,mzero)
 import Control.Loop (numLoop,numLoopFold)
 
-import Data.Monoid
+import Data.Monoid((<>))
 
 -- Data
 import           Control.Monad.Primitive (PrimMonad, PrimState)
@@ -80,6 +81,9 @@ import           Data.List               (maximumBy,foldl1')
 import           Data.Ord                (comparing)
 import qualified Data.Vector             as V
 import qualified Data.Vector.Mutable     as MV
+
+import Control.Monad.Trans.State.Strict(State,execState)
+import qualified Control.Monad.Trans.State.Strict as State
 
 -------------------------------------------------------
 -------------------------------------------------------
@@ -962,6 +966,7 @@ scaleRow = mapRow . const . (*)
 -- > combineRows 2 2 1 ( 7 8 9 ) = (  7  8  9 )
 combineRows :: Num a => Int -> a -> Int -> Matrix a -> Matrix a
 combineRows r1 l r2 m = mapRow (\j x -> x + l * getElem r2 j m) r1 m
+-- r1 = r1 + l * r2
 
 -- | Switch two rows of a matrix.
 --   Example:
@@ -1247,4 +1252,55 @@ detLU :: (Ord a, Fractional a, NFData a) => Matrix a -> a
 detLU m = case luDecomp m of
   Just (u,_,_,d) -> d * diagProd u
   Nothing -> 0
+
+invert :: (MonadPlus maybe, Eq a, Num a, Fractional a) => Matrix a -> maybe (Matrix a)
+invert m = let
+    size = nrows m
+    augmented = m <|> identity size
+  in if size /= ncols m then mzero
+  else gauss_jordan 1 augmented >>= return . submatrix 1 size (size+1) (2*size)
+
+gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a) => Int -> Matrix a -> maybe (Matrix a)
+gauss_jordan start m = let
+    rows = nrows m
+    corner = m ! (rows,rows) -- not actually corner due to augmentation
+  in if start == nrows m
+     then if corner == 0 then mzero
+          else return $ jordan start $ scaleRow (recip corner) start m
+  else do
+    pivot <- findPivot start m [start .. nrows m]
+    gauss_jordan (start+1) $ execState (do_gauss start pivot) m
+
+do_gauss :: (Fractional a, Num a) => Int -> Int -> State (Matrix a) ()
+do_gauss start pivot = do
+  State.modify' $ switchRows start pivot
+  m <- State.get
+  State.modify' $ scaleRow (recip $ m ! (start,start)) start
+  rows <- State.gets nrows
+  mapM_ (one_rowop start) [start+1 .. rows]
+
+one_rowop :: (Num a, Fractional a) => Int -> Int -> State (Matrix a) ()
+one_rowop source target = do
+  m <- State.get
+  let lower = m ! (target,source)
+  State.modify' $ combineRows target (negate  lower) source
+
+-- pivot strategy is to find the first nonzero entry.  this is not
+-- numerically optimal, but if you care about numerical issues, you
+-- should not be inverting a matrix anyway: use luDecomp instead.
+-- This was written for exact Rational arithmetic.
+findPivot :: (MonadPlus maybe, Eq a, Num a) => Int -> Matrix a -> [Int] -> maybe Int
+findPivot _ _ [] = mzero
+findPivot column m (h:t) = if m ! (h,column) /= 0
+  -- testing for equality with zero is the million dollar question
+  then return h
+  else findPivot column m t
+
+-- the backwards part is easier because the diagonal should be all
+-- ones now.
+jordan :: (Eq a, Num a, Fractional a) => Int -> Matrix a -> Matrix a
+jordan start m = execState (mapM_ do_jordan $ enumFromThenTo start (pred start) 1 ) m
+
+do_jordan :: (Fractional a, Num a) => Int -> State (Matrix a) ()
+do_jordan start = mapM_ (one_rowop start) [1.. pred start]
 
