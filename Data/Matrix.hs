@@ -1265,7 +1265,7 @@ gauss_jordan start m = do
     pivot <- findPivot start m [start .. nrows m]
     (if start < nrows m
      then gauss_jordan (start+1)
-     else return . (jordan $ nrows m)
+     else return . execState ( mapM_ do_jordan $ reverse [1..nrows m])
      ) $ execState (do_gauss start pivot) m
 
 do_gauss :: (Fractional a, Num a, NFData a) => Int -> Int -> State (Matrix a) ()
@@ -1305,9 +1305,6 @@ findPivot column m (h:t) = if m ! (h,column) /= 0
 
 -- the backwards part is easier because the diagonal should be all
 -- ones now.
-jordan :: (Eq a, Num a, Fractional a, NFData a) => Int -> Matrix a -> Matrix a
-jordan start m = execState (mapM_ do_jordan $ enumFromThenTo start (pred start) 1) m
-
 do_jordan :: (Fractional a, Num a, NFData a) => Int -> State (Matrix a) ()
 do_jordan start = do
   mapM_ (one_rowop start) [1.. pred start]
