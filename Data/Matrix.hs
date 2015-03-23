@@ -1261,15 +1261,12 @@ invert m = let
   else gauss_jordan 1 augmented >>= return . submatrix 1 size (size+1) (2*size)
 
 gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Int -> Matrix a -> maybe (Matrix a)
-gauss_jordan start m = let
-    rows = nrows m
-    corner = m ! (rows,rows) -- not actually corner due to augmentation
-  in if start == rows
-     then if corner == 0 then mzero
-          else return $ jordan rows $ scaleRow (recip corner) rows m
-  else do
+gauss_jordan start m = do
     pivot <- findPivot start m [start .. nrows m]
-    gauss_jordan (start+1) $ execState (do_gauss start pivot) m
+    (if start < nrows m
+     then gauss_jordan (start+1)
+     else return . (jordan $ nrows m)
+     ) $ execState (do_gauss start pivot) m
 
 do_gauss :: (Fractional a, Num a, NFData a) => Int -> Int -> State (Matrix a) ()
 do_gauss start pivot = do
