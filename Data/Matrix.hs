@@ -961,7 +961,7 @@ scaleRow = mapRow . const . (*)
 -- >                   ( 4 5 6 )   (  6  9 12 )
 -- > combineRows 2 2 1 ( 7 8 9 ) = (  7  8  9 )
 combineRows :: Num a => Int -> a -> Int -> Matrix a -> Matrix a
-combineRows r1 l r2 m = mapRow (\j x -> x + l * getElem r2 j m) r1 m
+combineRows r1 l r2 m = forceMatrix $ mapRow (\j x -> x + l * getElem r2 j m) r1 m
 
 -- | Switch two rows of a matrix.
 --   Example:
@@ -1026,16 +1026,16 @@ switchCols c1 c2 (M n m ro co w vs) = M n m ro co w $ V.modify (\mv -> do
 --
 --   'Nothing' is returned if no LU decomposition exists.
 
-luDecomp :: (Ord a, Fractional a) => Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
+luDecomp :: (Ord a, Fractional a, NFData a) => Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
 luDecomp = luDecompWithMag abs
 
-luDecompWithMag :: (Ord m, Eq a, Fractional a) => (a -> m) -> Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
+luDecompWithMag :: (Ord m, Eq a, Fractional a, NFData a) => (a -> m) -> Matrix a -> Maybe (Matrix a,Matrix a,Matrix a,a)
 luDecompWithMag getMagnitude a = recLUDecomp getMagnitude a i i 1 1 n
  where
   i = identity $ nrows a
   n = min (nrows a) (ncols a)
 
-recLUDecomp ::  (Ord m, Eq a, Fractional a)
+recLUDecomp ::  (Ord m, Eq a, Fractional a, NFData a)
             =>  (a -> m) -- ^ getMagnitude
             ->  Matrix a -- ^ U
             ->  Matrix a -- ^ L
@@ -1047,12 +1047,12 @@ recLUDecomp ::  (Ord m, Eq a, Fractional a)
 recLUDecomp getMagnitude u l p d k n =
     if k > n then Just (u,l,p,d)
     else if ukk == 0 then Nothing
-                     else recLUDecomp getMagnitude u'' l'' p' d' (k+1) n
+                     else recLUDecomp getMagnitude (forceMatrix u'') (forceMatrix l'') (forceMatrix p') (seq d' d') (k+1) n
  where
   -- Pivot strategy: maximum value in absolute value below the current row.
   i  = maximumBy (\x y -> compare (getMagnitude $ u ! (x,k)) (getMagnitude $ u ! (y,k))) [ k .. n ]
   -- Switching to place pivot in current row.
-  u' = switchRows k i u
+  u' = switchRows k i $ forceMatrix u
   l' = let lw = vcols l
            en = encode lw
            lro = rowOffset l
@@ -1060,24 +1060,24 @@ recLUDecomp getMagnitude u l p d k n =
        in  if i == k
               then l
               else M (nrows l) (ncols l) lro lco lw $
-                     V.modify (\mv -> forM_ [1 .. k-1] $ 
+                     V.modify (\mv -> forM_ [1 .. k-1] $
                                  \j -> MV.swap mv (en (i+lro,j+lco))
                                                   (en (k+lro,j+lco))
                                 ) $ mvect l
-  p' = switchRows k i p
+  p' = forceMatrix $ switchRows k i p
   -- Permutation determinant
   d' = if i == k then d else negate d
   -- Cancel elements below the pivot.
-  (u'',l'') = go u' l' (k+1)
+  (u'',l'') = go (forceMatrix u') (forceMatrix l') (k+1)
   ukk = u' ! (k,k)
-  go u_ l_ j =
+  go u_ l_ j = deepseq u_ $ deepseq l_ $
     if j > nrows u_
-    then (u_,l_)
+    then (forceMatrix u_,forceMatrix l_)
     else let x = (u_ ! (j,k)) / ukk
-         in  go (combineRows j (-x) k u_) (setElem x (j,k) l_) (j+1)
+         in  go (forceMatrix $ combineRows j (-x) k u_) (forceMatrix $ setElem x (j,k) l_) (j+1)
 
 -- | Unsafe version of 'luDecomp'. It fails when the input matrix is singular.
-luDecompUnsafe :: (Ord a, Fractional a) => Matrix a -> (Matrix a, Matrix a, Matrix a, a)
+luDecompUnsafe :: (Ord a, Fractional a, NFData a) => Matrix a -> (Matrix a, Matrix a, Matrix a, a)
 luDecompUnsafe m = case luDecomp m of
   Just x -> x
   _ -> error "luDecompUnsafe of singular matrix."
@@ -1240,7 +1240,7 @@ detLaplace m = sum1 [ (-1)^(i-1) * m ! (i,1) * detLaplace (minorMatrix i 1 m) | 
 
 -- | Matrix determinant using LU decomposition.
 --   It works even when the input matrix is singular.
-detLU :: (Ord a, Fractional a) => Matrix a -> a
+detLU :: (Ord a, Fractional a, NFData a) => Matrix a -> a
 detLU m = case luDecomp m of
   Just (u,_,_,d) -> d * diagProd u
   Nothing -> 0
