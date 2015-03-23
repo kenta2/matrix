@@ -1295,7 +1295,7 @@ one_rowop source target = do
 -- pivot strategy is to find the first nonzero entry.  this is not
 -- numerically optimal, but if you care about numerical issues, you
 -- should not be inverting a matrix anyway: use luDecomp instead.
--- This was written for exact Rational arithmetic.
+-- This was originally written for exact Rational arithmetic.
 findPivot :: (MonadPlus maybe, Eq a, Num a) => Int -> Matrix a -> [Int] -> maybe Int
 findPivot _ _ [] = mzero
 findPivot column m (h:t) = if m ! (h,column) /= 0
