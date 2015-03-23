@@ -1281,7 +1281,7 @@ one_rowop :: (Num a, Fractional a, NFData a) => Int -> Int -> State (Matrix a) (
 one_rowop source target = do
   m <- State.get
   let lower = m ! (target,source)
-  State.modify' $ combineRows target (negate  lower) source
+  State.modify' $ combineRows target (negate lower) source
   forceMatrixState
 -- ^ this forces the entire matrix, which is seems than optimal, but
 -- actually seems faster than forcing less frequently (see annotations
