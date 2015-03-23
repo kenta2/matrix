@@ -71,9 +71,9 @@ module Data.Matrix (
 import Control.DeepSeq
 import Control.Monad (forM_)
 import Control.Loop (numLoop,numLoopFold)
-import Data.Foldable (Foldable, foldMap)
+
 import Data.Monoid
-import Data.Traversable
+
 -- Data
 import           Control.Monad.Primitive (PrimMonad, PrimState)
 import           Data.List               (maximumBy,foldl1')
@@ -1207,6 +1207,7 @@ cholDecomp a
 -- >       ( 4 5 6 )
 -- > trace ( 7 8 9 ) = 15
 trace :: Num a => Matrix a -> a
+{-# NOINLINE trace #-}
 trace = V.sum . getDiag
 
 -- | Product of the elements in the diagonal. See also 'getDiag'.
@@ -1233,6 +1234,7 @@ diagProd = V.product . getDiag
 --   consider to use 'detLU' in order to obtain better performance.
 --   Function 'detLaplace' is /extremely/ slow.
 detLaplace :: Num a => Matrix a -> a
+{-# NOINLINE detLaplace #-}
 detLaplace m@(M 1 1 _ _ _ _) = m ! (1,1)
 detLaplace m = sum1 [ (-1)^(i-1) * m ! (i,1) * detLaplace (minorMatrix i 1 m) | i <- [1 .. nrows m] ]
   where
@@ -1241,6 +1243,7 @@ detLaplace m = sum1 [ (-1)^(i-1) * m ! (i,1) * detLaplace (minorMatrix i 1 m) | 
 -- | Matrix determinant using LU decomposition.
 --   It works even when the input matrix is singular.
 detLU :: (Ord a, Fractional a, NFData a) => Matrix a -> a
+{-# NOINLINE detLU #-}
 detLU m = case luDecomp m of
   Just (u,_,_,d) -> d * diagProd u
   Nothing -> 0
