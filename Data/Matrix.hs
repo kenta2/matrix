@@ -1253,14 +1253,14 @@ detLU m = case luDecomp m of
   Just (u,_,_,d) -> d * diagProd u
   Nothing -> 0
 
-invert :: (MonadPlus maybe, Eq a, Num a, Fractional a) => Matrix a -> maybe (Matrix a)
+invert :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Matrix a -> maybe (Matrix a)
 invert m = let
     size = nrows m
     augmented = m <|> identity size
   in if size /= ncols m then mzero
   else gauss_jordan 1 augmented >>= return . submatrix 1 size (size+1) (2*size)
 
-gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a) => Int -> Matrix a -> maybe (Matrix a)
+gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Int -> Matrix a -> maybe (Matrix a)
 gauss_jordan start m = let
     rows = nrows m
     corner = m ! (rows,rows) -- not actually corner due to augmentation
@@ -1271,19 +1271,29 @@ gauss_jordan start m = let
     pivot <- findPivot start m [start .. nrows m]
     gauss_jordan (start+1) $ execState (do_gauss start pivot) m
 
-do_gauss :: (Fractional a, Num a) => Int -> Int -> State (Matrix a) ()
+do_gauss :: (Fractional a, Num a, NFData a) => Int -> Int -> State (Matrix a) ()
 do_gauss start pivot = do
   State.modify' $ switchRows start pivot
   m <- State.get
   State.modify' $ scaleRow (recip $ m ! (start,start)) start
   rows <- State.gets nrows
   mapM_ (one_rowop start) [start+1 .. rows]
+--  forceMatrixState -- ^ LESSFREQUENTLY
 
-one_rowop :: (Num a, Fractional a) => Int -> Int -> State (Matrix a) ()
+one_rowop :: (Num a, Fractional a, NFData a) => Int -> Int -> State (Matrix a) ()
 one_rowop source target = do
   m <- State.get
   let lower = m ! (target,source)
   State.modify' $ combineRows target (negate  lower) source
+  forceMatrixState
+-- ^ this forces the entire matrix, which is seems than optimal, but
+-- actually seems faster than forcing less frequently (see annotations
+-- for LESSFREQUENTLY) , possibly because of less time spent on
+-- garbage collection
+
+-- | this is not enough
+--  mapM_ (\i -> deepseq (m ! (target,i)) $ return ()) [1.. ncols m]
+
 
 -- pivot strategy is to find the first nonzero entry.  this is not
 -- numerically optimal, but if you care about numerical issues, you
@@ -1298,9 +1308,15 @@ findPivot column m (h:t) = if m ! (h,column) /= 0
 
 -- the backwards part is easier because the diagonal should be all
 -- ones now.
-jordan :: (Eq a, Num a, Fractional a) => Int -> Matrix a -> Matrix a
+jordan :: (Eq a, Num a, Fractional a, NFData a) => Int -> Matrix a -> Matrix a
 jordan start m = execState (mapM_ do_jordan $ enumFromThenTo start (pred start) 1 ) m
 
-do_jordan :: (Fractional a, Num a) => Int -> State (Matrix a) ()
-do_jordan start = mapM_ (one_rowop start) [1.. pred start]
+do_jordan :: (Fractional a, Num a, NFData a) => Int -> State (Matrix a) ()
+do_jordan start = do
+  mapM_ (one_rowop start) [1.. pred start]
+--  forceMatrixState -- ^ LESSFREQUENTLY
 
+forceMatrixState :: (NFData a) => State (Matrix a) ()
+forceMatrixState = do
+  m <- State.get
+  deepseq m $ return ()
