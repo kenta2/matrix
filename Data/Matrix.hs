@@ -1264,9 +1264,9 @@ gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Int ->
 gauss_jordan start m = let
     rows = nrows m
     corner = m ! (rows,rows) -- not actually corner due to augmentation
-  in if start == nrows m
+  in if start == rows
      then if corner == 0 then mzero
-          else return $ jordan start $ scaleRow (recip corner) start m
+          else return $ jordan rows $ scaleRow (recip corner) rows m
   else do
     pivot <- findPivot start m [start .. nrows m]
     gauss_jordan (start+1) $ execState (do_gauss start pivot) m
@@ -1309,7 +1309,7 @@ findPivot column m (h:t) = if m ! (h,column) /= 0
 -- the backwards part is easier because the diagonal should be all
 -- ones now.
 jordan :: (Eq a, Num a, Fractional a, NFData a) => Int -> Matrix a -> Matrix a
-jordan start m = execState (mapM_ do_jordan $ enumFromThenTo start (pred start) 1 ) m
+jordan start m = execState (mapM_ do_jordan $ enumFromThenTo start (pred start) 1) m
 
 do_jordan :: (Fractional a, Num a, NFData a) => Int -> State (Matrix a) ()
 do_jordan start = do
