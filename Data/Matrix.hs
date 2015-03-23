@@ -961,7 +961,7 @@ scaleRow = mapRow . const . (*)
 -- >                   ( 4 5 6 )   (  6  9 12 )
 -- > combineRows 2 2 1 ( 7 8 9 ) = (  7  8  9 )
 combineRows :: Num a => Int -> a -> Int -> Matrix a -> Matrix a
-combineRows r1 l r2 m = forceMatrix $ mapRow (\j x -> x + l * getElem r2 j m) r1 m
+combineRows r1 l r2 m = mapRow (\j x -> x + l * getElem r2 j m) r1 m
 
 -- | Switch two rows of a matrix.
 --   Example:
@@ -1047,12 +1047,12 @@ recLUDecomp ::  (Ord m, Eq a, Fractional a, NFData a)
 recLUDecomp getMagnitude u l p d k n =
     if k > n then Just (u,l,p,d)
     else if ukk == 0 then Nothing
-                     else recLUDecomp getMagnitude (forceMatrix u'') (forceMatrix l'') (forceMatrix p') (seq d' d') (k+1) n
+                     else recLUDecomp getMagnitude u'' l'' p' d' (k+1) n
  where
   -- Pivot strategy: maximum value in absolute value below the current row.
   i  = maximumBy (\x y -> compare (getMagnitude $ u ! (x,k)) (getMagnitude $ u ! (y,k))) [ k .. n ]
   -- Switching to place pivot in current row.
-  u' = switchRows k i $ forceMatrix u
+  u' = switchRows k i u
   l' = let lw = vcols l
            en = encode lw
            lro = rowOffset l
@@ -1060,21 +1060,21 @@ recLUDecomp getMagnitude u l p d k n =
        in  if i == k
               then l
               else M (nrows l) (ncols l) lro lco lw $
-                     V.modify (\mv -> forM_ [1 .. k-1] $
+                     V.modify (\mv -> forM_ [1 .. k-1] $ 
                                  \j -> MV.swap mv (en (i+lro,j+lco))
                                                   (en (k+lro,j+lco))
                                 ) $ mvect l
-  p' = forceMatrix $ switchRows k i p
+  p' = switchRows k i p
   -- Permutation determinant
   d' = if i == k then d else negate d
   -- Cancel elements below the pivot.
-  (u'',l'') = go (forceMatrix u') (forceMatrix l') (k+1)
+  (u'',l'') = go u' l' (k+1)
   ukk = u' ! (k,k)
   go u_ l_ j = deepseq u_ $ deepseq l_ $
     if j > nrows u_
-    then (forceMatrix u_,forceMatrix l_)
+    then (u_,l_)
     else let x = (u_ ! (j,k)) / ukk
-         in  go (forceMatrix $ combineRows j (-x) k u_) (forceMatrix $ setElem x (j,k) l_) (j+1)
+         in  go (combineRows j (-x) k u_) (setElem x (j,k) l_) (j+1)
 
 -- | Unsafe version of 'luDecomp'. It fails when the input matrix is singular.
 luDecompUnsafe :: (Ord a, Fractional a, NFData a) => Matrix a -> (Matrix a, Matrix a, Matrix a, a)
