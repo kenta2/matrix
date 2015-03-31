@@ -1,4 +1,4 @@
-
+{-# LANGUAGE LambdaCase, ScopedTypeVariables #-}
 -- | Matrix datatype and operations.
 --
 --   Every provided example has been tested.
@@ -65,6 +65,7 @@ module Data.Matrix (
     -- ** Determinants
   , detLaplace
   , detLU
+  , invertS
   , invert
   ) where
 
@@ -86,6 +87,11 @@ import Data.Traversable(Traversable,sequenceA)
 
 import Control.Monad.Trans.State.Strict(State,execState)
 import qualified Control.Monad.Trans.State.Strict as State
+
+import Control.Monad.ST(runST);
+import Control.Monad.Trans(lift);
+import Control.Monad.Trans.Maybe(runMaybeT,MaybeT);
+
 
 type Index = Integer
 
@@ -1257,8 +1263,8 @@ detLU m = case luDecomp m of
   Just (u,_,_,d) -> d * diagProd u
   Nothing -> 0
 
-invert :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Matrix a -> maybe (Matrix a)
-invert m = let
+invertS :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Matrix a -> maybe (Matrix a)
+invertS m = let
     size = nrows m
     augmented = m <|> identity size
   in if size /= ncols m then mzero
@@ -1266,23 +1272,23 @@ invert m = let
 
 gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Index -> Matrix a -> maybe (Matrix a)
 gauss_jordan start m = do
-    pivot <- findPivot start m [start .. nrows m]
+    pivot <- findPivotS start m [start .. nrows m]
     (if start < nrows m
      then gauss_jordan (start+1)
-     else return . execState ( mapM_ do_jordan $ reverse [1..nrows m])
-     ) $ execState (do_gauss start pivot) m
+     else return . execState ( mapM_ do_jordanS $ reverse [1..nrows m])
+     ) $ execState (do_gaussS start pivot) m
 
-do_gauss :: (Fractional a, Num a, NFData a) => Index -> Index -> State (Matrix a) ()
-do_gauss start pivot = do
+do_gaussS :: (Fractional a, Num a, NFData a) => Index -> Index -> State (Matrix a) ()
+do_gaussS start pivot = do
   State.modify' $ switchRows start pivot
   m <- State.get
   State.modify' $ scaleRow (recip $ m ! (start,start)) start
   rows <- State.gets nrows
-  mapM_ (one_rowop start) [start+1 .. rows]
+  mapM_ (one_rowopS start) [start+1 .. rows]
 --  forceMatrixState -- ^ LESSFREQUENTLY
 
-one_rowop :: (Num a, Fractional a, NFData a) => Index -> Index -> State (Matrix a) ()
-one_rowop source target = do
+one_rowopS :: (Num a, Fractional a, NFData a) => Index -> Index -> State (Matrix a) ()
+one_rowopS source target = do
   m <- State.get
   let lower = m ! (target,source)
   State.modify' $ combineRows target (negate lower) source
@@ -1300,21 +1306,118 @@ one_rowop source target = do
 -- numerically optimal, but if you care about numerical issues, you
 -- should not be inverting a matrix anyway: use luDecomp instead.
 -- This was originally written for exact Rational arithmetic.
-findPivot :: (MonadPlus maybe, Eq a, Num a) => Index -> Matrix a -> [Index] -> maybe Index
-findPivot _ _ [] = mzero
-findPivot column m (h:t) = if m ! (h,column) /= 0
+findPivotS :: (MonadPlus maybe, Eq a, Num a) => Index -> Matrix a -> [Index] -> maybe Index
+findPivotS _ _ [] = mzero
+findPivotS column m (h:t) = if m ! (h,column) /= 0
   -- testing for equality with zero is the million dollar question
   then return h
-  else findPivot column m t
+  else findPivotS column m t
 
 -- the backwards part is easier because the diagonal should be all
 -- ones now.
-do_jordan :: (Fractional a, Num a, NFData a) => Index -> State (Matrix a) ()
-do_jordan start = do
-  mapM_ (one_rowop start) [1.. pred start]
+do_jordanS :: (Fractional a, Num a, NFData a) => Index -> State (Matrix a) ()
+do_jordanS start = do
+  mapM_ (one_rowopS start) [1.. pred start]
 --  forceMatrixState -- ^ LESSFREQUENTLY
 
 forceMatrixState :: (NFData a) => State (Matrix a) ()
 forceMatrixState = do
   m <- State.get
   deepseq m $ return ()
+
+invert :: (MonadPlus maybe, Eq a, Fractional a) => Matrix a -> maybe (Matrix a);
+-- gauss_jordan1 m = runST $ gauss_jordan m; -- a unusual case where (.) does not work
+invert m = toMonadPlus $ runST $ runMaybeT $ gauss_jordan1 $ m <|> (identity $ nrows m);
+
+-- add to library
+toMonadPlus :: (MonadPlus m) => Maybe a -> m a;
+toMonadPlus = \case {
+Nothing -> mzero;
+Just x -> return x;
+};
+
+gauss_jordan1 :: forall monad ty. (PrimMonad monad, Eq ty, Fractional ty) => Matrix ty -> MaybeT monad (Matrix ty);
+gauss_jordan1 original = do
+{ let {size = nrows original}
+; m :: Mutablematrix (PrimState monad) ty <- lift $ thaw_matrix original
+; mapM_ (onegauss m) $ enumFromTo 1 size
+; mapM_ (lift . do_jordan m) $ enumFromThenTo size (pred size) 1
+; lift $ freeze_matrix m >>= return . submatrix 1 size (size+1) (2*size)
+};
+
+data Mutablematrix s a = Mutablematrix {
+  mrows :: !Index
+, mcols :: !Index
+, muvect :: MV.MVector s a
+};
+
+type Coord = (Index,Index);
+
+freeze_matrix :: (PrimMonad monad) => Mutablematrix (PrimState monad) a -> monad (Matrix a);
+freeze_matrix (Mutablematrix x y z) = V.freeze z >>= return . M x y 0 0 y;
+
+thaw_matrix :: forall monad a . (PrimMonad monad) => Matrix a -> monad (Mutablematrix (PrimState monad) a);
+thaw_matrix m =  V.thaw (getMatrixAsVector m) >>= return . Mutablematrix (nrows m) (ncols m);
+
+onegauss :: (PrimMonad monad, Fractional ty, Eq ty) => Mutablematrix (PrimState monad) ty -> Index -> MaybeT monad ();
+onegauss a start = do {
+f <- lift $ freeze_matrix a;
+pivot <- findPivot start f [start .. nrows f];
+lift $ do_gauss start pivot a;
+};
+
+-- pivot strategy is to find the first nonzero entry.  this is not
+-- numerically optimal, but if you care about numerical issues, you
+-- should not be inverting a matrix anyway: use luDecomp instead.
+-- This was originally written for exact Rational arithmetic.
+findPivot :: (MonadPlus maybe, Eq a, Num a) => Index -> Matrix a -> [Index] -> maybe Index;
+findPivot _ _ [] = mzero;
+findPivot column m (h:t) = if m ! (h,column) /= 0
+  -- testing for equality with zero is the million dollar question
+  then return h
+  else findPivot column m t;
+
+do_gauss :: (Fractional a, Num a, PrimMonad monad) => Index -> Index -> Mutablematrix (PrimState monad) a -> monad ();
+do_gauss start pivot m = do {
+  switchRowsM start pivot m;
+  pval <- getElemM m (start,start);
+  scaleRowM (recip pval) start m;
+  mapM_ (one_rowop start m) [start+1 .. (mrows m)];
+};
+one_rowop :: (Fractional a, Num a, PrimMonad monad) => Index -> Mutablematrix (PrimState monad) a -> Index -> monad ();
+one_rowop source m target = do {
+  lower <- getElemM m (target,source);
+  combineRowsM target (negate lower) source m;
+};
+
+getElemM :: (PrimMonad monad) => Mutablematrix (PrimState monad) ty -> Coord -> monad ty;
+getElemM a i = MV.read (muvect a) $ encode (mcols a) i;
+
+write :: (PrimMonad monad) => Mutablematrix (PrimState monad) ty -> Coord -> ty -> monad ();
+write a i x = MV.write (muvect a) (encode (mcols a) i) x;
+
+swap :: (PrimMonad monad) => Mutablematrix (PrimState monad) ty -> Coord -> Coord -> monad ();
+swap a i j = MV.swap (muvect a) (encode (mcols a) i) (encode (mcols a) j);
+
+switchRowsM :: (PrimMonad monad) => Index -> Index -> Mutablematrix (PrimState monad) ty -> monad ();
+switchRowsM i j a = mapcols a $ \c -> swap a (i,c) (j,c);
+
+combineRowsM :: (PrimMonad monad, Num ty) => Index -> ty -> Index -> Mutablematrix (PrimState monad) ty -> monad ();
+-- r1 = r1 + l * r2
+combineRowsM r1 l r2 a = mapcols a $ \c -> do
+{ v1 <- getElemM a (r1,c)
+; v2 <- getElemM a (r2,c)
+; let { x = v1+l*v2; };
+; seq x $ write a (r1,c) x; -- avoid small space leak
+};
+
+scaleRowM :: (PrimMonad monad, Num ty) => ty -> Index -> Mutablematrix (PrimState monad) ty -> monad ();
+scaleRowM multiplier r a = mapcols a $ \c -> do { v <- getElemM a (r,c) ; write a (r,c) $ multiplier * v };
+
+mapcols :: (PrimMonad monad) => Mutablematrix (PrimState monad) ty -> (Index -> monad ()) -> monad ();
+mapcols m f = mapM_ f $ enumFromTo 1 $ mcols m;
+
+-- the backwards part is easier because the diagonal should be all
+-- ones now.
+do_jordan :: (PrimMonad monad, Fractional ty) => Mutablematrix (PrimState monad) ty -> Index -> monad ();
+do_jordan a start = mapM_ (one_rowop start a) [1.. pred start];
