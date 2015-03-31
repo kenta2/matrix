@@ -77,40 +77,44 @@ import Data.Monoid((<>))
 
 -- Data
 import           Control.Monad.Primitive (PrimMonad, PrimState)
-import           Data.List               (maximumBy,foldl1')
+import           Data.List               (maximumBy,foldl1',genericTake, genericLength)
 import           Data.Ord                (comparing)
 import qualified Data.Vector             as V
 import qualified Data.Vector.Mutable     as MV
+import Data.Foldable(Foldable,foldMap)
+import Data.Traversable(Traversable,sequenceA)
 
 import Control.Monad.Trans.State.Strict(State,execState)
 import qualified Control.Monad.Trans.State.Strict as State
+
+type Index = Integer
 
 -------------------------------------------------------
 -------------------------------------------------------
 ---- MATRIX TYPE
 
-encode :: Int -> (Int,Int) -> Int
+encode :: Index -> (Index,Index) -> Int
 {-# INLINE encode #-}
-encode m (i,j) = (i-1)*m + j - 1
+encode m (i,j) = fromIntegral $ (i-1)*m + j - 1
 
-decode :: Int -> Int -> (Int,Int)
+decode :: Index -> Int -> (Index,Index)
 {-# INLINE decode #-}
 decode m k = (q+1,r+1)
  where
-  (q,r) = quotRem k m
+  (q,r) = quotRem (fromIntegral k) m
 
 -- | Type of matrices.
 --
 --   Elements can be of any type. Rows and columns
 --   are indexed starting by 1. This means that, if @m :: Matrix a@ and
---   @i,j :: Int@, then @m ! (i,j)@ is the element in the @i@-th row and
+--   @i,j :: Index@, then @m ! (i,j)@ is the element in the @i@-th row and
 --   @j@-th column of @m@.
 data Matrix a = M {
-   nrows     :: {-# UNPACK #-} !Int -- ^ Number of rows.
- , ncols     :: {-# UNPACK #-} !Int -- ^ Number of columns.
- , rowOffset :: {-# UNPACK #-} !Int
- , colOffset :: {-# UNPACK #-} !Int
- , vcols     :: {-# UNPACK #-} !Int -- ^ Number of columns of the matrix without offset
+   nrows     :: {-# UNPACK #-} !Index -- ^ Number of rows.
+ , ncols     :: {-# UNPACK #-} !Index -- ^ Number of columns.
+ , rowOffset :: {-# UNPACK #-} !Index
+ , colOffset :: {-# UNPACK #-} !Index
+ , vcols     :: {-# UNPACK #-} !Index -- ^ Number of columns of the matrix without offset
  , mvect     :: V.Vector a          -- ^ Content of the matrix as a plain vector.
    }
 
@@ -122,7 +126,7 @@ instance Eq a => Eq (Matrix a) where
             : [ m1 ! (i,j) == m2 ! (i,j) | i <- [1 .. r] , j <- [1 .. c] ]
 
 -- | Just a cool way to output the size of a matrix.
-sizeStr :: Int -> Int -> String
+sizeStr :: Index -> Index -> String
 sizeStr n m = show n ++ "x" ++ show m
 
 -- | Display a matrix as a 'String' using the 'Show' instance of its elements.
@@ -165,8 +169,8 @@ instance Functor Matrix where
 -- >                          ( 4 5 6 )   ( 5 6 7 )
 -- > mapRow (\_ x -> x + 1) 2 ( 7 8 9 ) = ( 7 8 9 )
 --
-mapRow :: (Int -> a -> a) -- ^ Function takes the current column as additional argument.
-        -> Int            -- ^ Row to map.
+mapRow :: (Index -> a -> a) -- ^ Function takes the current column as additional argument.
+        -> Index            -- ^ Row to map.
         -> Matrix a -> Matrix a
 mapRow f r m =
   matrix (nrows m) (ncols m) $ \(i,j) ->
@@ -182,8 +186,8 @@ mapRow f r m =
 -- >                          ( 4 5 6 )   ( 4 6 6 )
 -- > mapCol (\_ x -> x + 1) 2 ( 7 8 9 ) = ( 7 9 9 )
 --
-mapCol :: (Int -> a -> a) -- ^ Function takes the current row as additional argument.
-        -> Int            -- ^ Column to map.
+mapCol :: (Index -> a -> a) -- ^ Function takes the current row as additional argument.
+        -> Index            -- ^ Column to map.
         -> Matrix a -> Matrix a
 mapCol f c m =
   matrix (nrows m) (ncols m) $ \(i,j) ->
@@ -216,11 +220,11 @@ instance Traversable Matrix where
 -- >     ( 0 0 ... 0 0 )
 -- >   n ( 0 0 ... 0 0 )
 zero :: Num a =>
-     Int -- ^ Rows
-  -> Int -- ^ Columns
+     Index -- ^ Rows
+  -> Index -- ^ Columns
   -> Matrix a
 {-# INLINE zero #-}
-zero n m = M n m 0 0 m $ V.replicate (n*m) 0
+zero n m = M n m 0 0 m $ V.replicate (fromIntegral $ n*m) 0
 
 -- | /O(rows*cols)/. Generate a matrix from a generator function.
 --   Example of usage:
@@ -229,13 +233,13 @@ zero n m = M n m 0 0 m $ V.replicate (n*m) 0
 -- >                                  (  3  2  1  0 )
 -- >                                  (  5  4  3  2 )
 -- > matrix 4 4 $ \(i,j) -> 2*i - j = (  7  6  5  4 )
-matrix :: Int -- ^ Rows
-       -> Int -- ^ Columns
-       -> ((Int,Int) -> a) -- ^ Generator function
+matrix :: Index -- ^ Rows
+       -> Index -- ^ Columns
+       -> ((Index,Index) -> a) -- ^ Generator function
        -> Matrix a
 {-# INLINE matrix #-}
 matrix n m f = M n m 0 0 m $ V.create $ do
-  v <- MV.new $ n * m
+  v <- MV.new $ fromIntegral $ n * m
   let en = encode m
   numLoop 1 n $
     \i -> numLoop 1 m $
@@ -252,7 +256,7 @@ matrix n m f = M n m 0 0 m $ V.create $ do
 -- >     ( 0 0 ... 1 0 )
 -- >   n ( 0 0 ... 0 1 )
 --
-identity :: Num a => Int -> Matrix a
+identity :: Num a => Index -> Matrix a
 identity n = matrix n n $ \(i,j) -> if i == j then 1 else 0
 
 -- | Create a matrix from a non-empty list given the desired size.
@@ -263,12 +267,12 @@ identity n = matrix n n $ \(i,j) -> if i == j then 1 else 0
 -- >                       ( 4 5 6 )
 -- > fromList 3 3 [1..] =  ( 7 8 9 )
 --
-fromList :: Int -- ^ Rows
-         -> Int -- ^ Columns
+fromList :: Index -- ^ Rows
+         -> Index -- ^ Columns
          -> [a] -- ^ List of elements
          -> Matrix a
 {-# INLINE fromList #-}
-fromList n m = M n m 0 0 m . V.fromListN (n*m)
+fromList n m = M n m 0 0 m . V.fromListN (fromIntegral $ n*m)
 
 -- | Get the elements of a matrix stored in a list.
 --
@@ -304,20 +308,20 @@ toLists m = [ [ unsafeGet i j m | j <- [1 .. ncols m] ] | i <- [1 .. nrows m] ]
 fromLists :: [[a]] -> Matrix a
 {-# INLINE fromLists #-}
 fromLists [] = error "fromLists: empty list."
-fromLists (xs:xss) = fromList n m $ concat $ xs : fmap (take m) xss
+fromLists (xs:xss) = fromList n m $ concat $ xs : fmap (genericTake m) xss
   where
-    n = 1 + length xss
-    m = length xs
+    n = 1 + genericLength xss
+    m = genericLength xs
 
 -- | /O(1)/. Represent a vector as a one row matrix.
 rowVector :: V.Vector a -> Matrix a
 rowVector v = M 1 m 0 0 m v
   where
-    m = V.length v
+    m = fromIntegral $ V.length v
 
 -- | /O(1)/. Represent a vector as a one column matrix.
 colVector :: V.Vector a -> Matrix a
-colVector v = M (V.length v) 1 0 0 1 v
+colVector v = M (fromIntegral $ V.length v) 1 0 0 1 v
 
 -- | /O(rows*cols)/. Permutation matrix.
 --
@@ -336,9 +340,9 @@ colVector v = M (V.length v) 1 0 0 1 v
 -- When @i == j@ it reduces to 'identity' @n@.
 --
 permMatrix :: Num a
-           => Int -- ^ Size of the matrix.
-           -> Int -- ^ Permuted row 1.
-           -> Int -- ^ Permuted row 2.
+           => Index -- ^ Size of the matrix.
+           -> Index -- ^ Permuted row 1.
+           -> Index -- ^ Permuted row 2.
            -> Matrix a -- ^ Permutation matrix.
 permMatrix n r1 r2 | r1 == r2 = identity n
 permMatrix n r1 r2 = matrix n n f
@@ -355,8 +359,8 @@ permMatrix n r1 r2 = matrix n n f
 
 -- | /O(1)/. Get an element of a matrix. Indices range from /(1,1)/ to /(n,m)/.
 --   It returns an 'error' if the requested element is outside of range.
-getElem :: Int      -- ^ Row
-        -> Int      -- ^ Column
+getElem :: Index      -- ^ Row
+        -> Index      -- ^ Column
         -> Matrix a -- ^ Matrix
         -> a
 {-# INLINE getElem #-}
@@ -371,42 +375,42 @@ getElem i j m =
      ++ " matrix."
 
 -- | /O(1)/. Unsafe variant of 'getElem', without bounds checking.
-unsafeGet :: Int      -- ^ Row
-          -> Int      -- ^ Column
+unsafeGet :: Index      -- ^ Row
+          -> Index      -- ^ Column
           -> Matrix a -- ^ Matrix
           -> a
 {-# INLINE unsafeGet #-}
 unsafeGet i j (M _ _ ro co w v) = V.unsafeIndex v $ encode w (i+ro,j+co)
 
 -- | Short alias for 'getElem'.
-(!) :: Matrix a -> (Int,Int) -> a
+(!) :: Matrix a -> (Index,Index) -> a
 {-# INLINE (!) #-}
 m ! (i,j) = getElem i j m
 
 -- | Internal alias for 'unsafeGet'.
-(!.) :: Matrix a -> (Int,Int) -> a
+(!.) :: Matrix a -> (Index,Index) -> a
 {-# INLINE (!.) #-}
 m !. (i,j) = unsafeGet i j m
 
 -- | Variant of 'getElem' that returns Maybe instead of an error.
-safeGet :: Int -> Int -> Matrix a -> Maybe a
+safeGet :: Index -> Index -> Matrix a -> Maybe a
 safeGet i j a@(M n m _ _ _ _)
  | i > n || j > m || i < 1 || j < 1 = Nothing
  | otherwise = Just $ unsafeGet i j a
 
 -- | /O(1)/. Get a row of a matrix as a vector.
-getRow :: Int -> Matrix a -> V.Vector a
+getRow :: Index -> Matrix a -> V.Vector a
 {-# INLINE getRow #-}
-getRow i (M _ m ro co w v) = V.slice (w*(i-1+ro) + co) m v
+getRow i (M _ m ro co w v) = V.slice (fromIntegral $ w*(i-1+ro) + co) (fromIntegral m) v
 
 -- | /O(rows)/. Get a column of a matrix as a vector.
-getCol :: Int -> Matrix a -> V.Vector a
+getCol :: Index -> Matrix a -> V.Vector a
 {-# INLINE getCol #-}
-getCol j (M n _ ro co w v) = V.generate n $ \i -> v V.! encode w (i+1+ro,j+co)
+getCol j (M n _ ro co w v) = V.generate (fromIntegral n) $ \i -> v V.! encode w (fromIntegral i+1+ro,j+co)
 
 -- | /O(min rows cols)/. Diagonal of a /not necessarily square/ matrix.
 getDiag :: Matrix a -> V.Vector a
-getDiag m = V.generate k $ \i -> m ! (i+1,i+1)
+getDiag m = V.generate (fromIntegral k) $ \i -> m ! (fromIntegral i+1, fromIntegral i+1)
  where
   k = min (nrows m) (ncols m)
 
@@ -422,10 +426,10 @@ getMatrixAsVector = mvect . forceMatrix
 
 msetElem :: PrimMonad m
          => a -- ^ New element
-         -> Int -- ^ Number of columns of the matrix
-         -> Int -- ^ Row offset
-         -> Int -- ^ Column offset
-         -> (Int,Int) -- ^ Position to set the new element
+         -> Index -- ^ Number of columns of the matrix
+         -> Index -- ^ Row offset
+         -> Index -- ^ Column offset
+         -> (Index,Index) -- ^ Position to set the new element
          -> MV.MVector (PrimState m) a -- ^ Mutable vector
          -> m ()
 {-# INLINE msetElem #-}
@@ -433,10 +437,10 @@ msetElem x w ro co (i,j) v = MV.write v (encode w (i+ro,j+co)) x
 
 unsafeMset :: PrimMonad m
          => a -- ^ New element
-         -> Int -- ^ Number of columns of the matrix
-         -> Int -- ^ Row offset
-         -> Int -- ^ Column offset
-         -> (Int,Int) -- ^ Position to set the new element
+         -> Index -- ^ Number of columns of the matrix
+         -> Index -- ^ Row offset
+         -> Index -- ^ Column offset
+         -> (Index,Index) -- ^ Position to set the new element
          -> MV.MVector (PrimState m) a -- ^ Mutable vector
          -> m ()
 {-# INLINE unsafeMset #-}
@@ -444,7 +448,7 @@ unsafeMset x w ro co (i,j) v = MV.unsafeWrite v (encode w (i+ro,j+co)) x
 
 -- | Replace the value of a cell in a matrix.
 setElem :: a -- ^ New value.
-        -> (Int,Int) -- ^ Position to replace.
+        -> (Index,Index) -- ^ Position to replace.
         -> Matrix a -- ^ Original matrix.
         -> Matrix a -- ^ Matrix with the given position replaced with the given value.
 {-# INLINE setElem #-}
@@ -452,7 +456,7 @@ setElem x p (M n m ro co w v) = M n m ro co w $ V.modify (msetElem x w ro co p) 
 
 -- | Unsafe variant of 'setElem', without bounds checking.
 unsafeSet :: a -- ^ New value.
-        -> (Int,Int) -- ^ Position to replace.
+        -> (Index,Index) -- ^ Position to replace.
         -> Matrix a -- ^ Original matrix.
         -> Matrix a -- ^ Matrix with the given position replaced with the given value.
 {-# INLINE unsafeSet #-}
@@ -482,16 +486,16 @@ transpose m = matrix (ncols m) (nrows m) $ \(i,j) -> m ! (j,i)
 -- > extendTo e n m a = setSize e (max n $ nrows a) (max m $ ncols a) a
 --
 extendTo :: a   -- ^ Element to add when extending.
-         -> Int -- ^ Minimal number of rows.
-         -> Int -- ^ Minimal number of columns.
+         -> Index -- ^ Minimal number of rows.
+         -> Index -- ^ Minimal number of columns.
          -> Matrix a -> Matrix a
 extendTo e n m a = setSize e (max n $ nrows a) (max m $ ncols a) a
 
 -- | Set the size of a matrix to given parameters. Use a default element
 --   for undefined entries if the matrix has been extended.
 setSize :: a   -- ^ Default element.
-        -> Int -- ^ Number of rows.
-        -> Int -- ^ Number of columns.
+        -> Index -- ^ Number of rows.
+        -> Index -- ^ Number of columns.
         -> Matrix a
         -> Matrix a
 {-# INLINE setSize #-}
@@ -510,10 +514,10 @@ setSize e n m a@(M n0 m0 _ _ _ _) = matrix n m $ \(i,j) ->
 -- >                   ( 1 2 3 )
 -- >                   ( 4 5 6 )   ( 2 3 )
 -- > submatrix 1 2 2 3 ( 7 8 9 ) = ( 5 6 )
-submatrix :: Int    -- ^ Starting row
-          -> Int -- ^ Ending row
-          -> Int    -- ^ Starting column
-          -> Int -- ^ Ending column
+submatrix :: Index    -- ^ Starting row
+          -> Index -- ^ Ending row
+          -> Index    -- ^ Starting column
+          -> Index -- ^ Ending column
           -> Matrix a
           -> Matrix a
 {-# INLINE submatrix #-}
@@ -530,8 +534,8 @@ submatrix r1 r2 c1 c2 (M n m ro co w v)
 -- >                 ( 1 2 3 )
 -- >                 ( 4 5 6 )   ( 1 3 )
 -- > minorMatrix 2 2 ( 7 8 9 ) = ( 7 9 )
-minorMatrix :: Int -- ^ Row @r@ to remove.
-            -> Int -- ^ Column @c@ to remove.
+minorMatrix :: Index -- ^ Row @r@ to remove.
+            -> Index -- ^ Column @c@ to remove.
             -> Matrix a -- ^ Original matrix.
             -> Matrix a -- ^ Matrix with row @r@ and column @c@ removed.
 minorMatrix r0 c0 (M n m ro co w v) =
@@ -558,8 +562,8 @@ minorMatrix r0 c0 (M n m ro co w v) =
 --
 --   Where T = Top, B = Bottom, L = Left, R = Right.
 --
-splitBlocks :: Int      -- ^ Row of the splitting element.
-            -> Int      -- ^ Column of the splitting element.
+splitBlocks :: Index      -- ^ Row of the splitting element.
+            -> Index      -- ^ Column of the splitting element.
             -> Matrix a -- ^ Matrix to split.
             -> (Matrix a,Matrix a
                ,Matrix a,Matrix a) -- ^ (TL,TR,BL,BR)
@@ -585,7 +589,7 @@ joinBlocks (tl,tr,bl,br) =
       m' = m + mr
       en = encode m'
   in  M n' m' 0 0 m' $ V.create $ do
-        v <- MV.new (n'*m')
+        v <- MV.new $ fromIntegral (n'*m')
         let wr = MV.write v
         numLoop 1 n  $ \i -> do
           numLoop 1 m  $ \j -> wr (en (i ,j  )) $ tl ! (i,j)
@@ -756,12 +760,12 @@ multStd_ a@(M n m _ _ _ _) b@(M _ m' _ _ _ _) = matrix n m' $ \(i,j) -> sum [ a 
 
 multStd__ :: Num a => Matrix a -> Matrix a -> Matrix a
 {-# INLINE multStd__ #-}
-multStd__ a b = matrix r c $ \(i,j) -> dotProduct (V.unsafeIndex avs $ i - 1) (V.unsafeIndex bvs $ j - 1)
+multStd__ a b = matrix r c $ \(i,j) -> dotProduct (V.unsafeIndex avs $ fromIntegral $ i - 1) (V.unsafeIndex bvs $ fromIntegral $ j - 1)
   where
     r = nrows a
-    avs = V.generate r $ \i -> getRow (i+1) a
+    avs = V.generate (fromIntegral r) $ \i -> getRow (fromIntegral i+1) a
     c = ncols b
-    bvs = V.generate c $ \i -> getCol (i+1) b
+    bvs = V.generate (fromIntegral c) $ \i -> getCol (fromIntegral i+1) b
 
 dotProduct :: Num a => V.Vector a -> V.Vector a -> a
 {-# INLINE dotProduct #-}
@@ -820,7 +824,7 @@ multStrassen a1@(M n m _ _ _ _) a2@(M n' m' _ _ _ _)
            b2 = setSize 0 n2 n2 a2
        in  submatrix 1 n 1 m' $ strassen b1 b2
 
-strmixFactor :: Int
+strmixFactor :: Index
 strmixFactor = 300
 
 -- | Strassen's mixed algorithm.
@@ -836,7 +840,7 @@ strassenMixed a b
            in  submatrix 1 r 1 r $ strassenMixed a' b'
  | otherwise =
       M r r 0 0 r $ V.create $ do
-         v <- MV.unsafeNew (r*r)
+         v <- MV.unsafeNew $ fromIntegral (r*r)
          let en = encode r
              n' = n + 1
          -- c11 = p1 + p4 - p5 + p7
@@ -955,7 +959,7 @@ scaleMatrix = fmap . (*)
 -- >              ( 1 2 3 )   (  1  2  3 )
 -- >              ( 4 5 6 )   (  8 10 12 )
 -- > scaleRow 2 2 ( 7 8 9 ) = (  7  8  9 )
-scaleRow :: Num a => a -> Int -> Matrix a -> Matrix a
+scaleRow :: Num a => a -> Index -> Matrix a -> Matrix a
 scaleRow = mapRow . const . (*)
 
 -- | Add to one row a scalar multiple of another row.
@@ -964,7 +968,7 @@ scaleRow = mapRow . const . (*)
 -- >                   ( 1 2 3 )   (  1  2  3 )
 -- >                   ( 4 5 6 )   (  6  9 12 )
 -- > combineRows 2 2 1 ( 7 8 9 ) = (  7  8  9 )
-combineRows :: Num a => Int -> a -> Int -> Matrix a -> Matrix a
+combineRows :: Num a => Index -> a -> Index -> Matrix a -> Matrix a
 combineRows r1 l r2 m = mapRow (\j x -> x + l * getElem r2 j m) r1 m
 -- r1 = r1 + l * r2
 
@@ -974,8 +978,8 @@ combineRows r1 l r2 m = mapRow (\j x -> x + l * getElem r2 j m) r1 m
 -- >                ( 1 2 3 )   ( 4 5 6 )
 -- >                ( 4 5 6 )   ( 1 2 3 )
 -- > switchRows 1 2 ( 7 8 9 ) = ( 7 8 9 )
-switchRows :: Int -- ^ Row 1.
-           -> Int -- ^ Row 2.
+switchRows :: Index -- ^ Row 1.
+           -> Index -- ^ Row 2.
            -> Matrix a -- ^ Original matrix.
            -> Matrix a -- ^ Matrix with rows 1 and 2 switched.
 switchRows r1 r2 (M n m ro co w vs) = M n m ro co w $ V.modify (\mv -> do
@@ -988,8 +992,8 @@ switchRows r1 r2 (M n m ro co w vs) = M n m ro co w $ V.modify (\mv -> do
 -- >                ( 1 2 3 )   ( 2 1 3 )
 -- >                ( 4 5 6 )   ( 5 4 6 )
 -- > switchCols 1 2 ( 7 8 9 ) = ( 8 7 9 )
-switchCols :: Int -- ^ Col 1.
-           -> Int -- ^ Col 2.
+switchCols :: Index -- ^ Col 1.
+           -> Index -- ^ Col 2.
            -> Matrix a -- ^ Original matrix.
            -> Matrix a -- ^ Matrix with cols 1 and 2 switched.
 switchCols c1 c2 (M n m ro co w vs) = M n m ro co w $ V.modify (\mv -> do
@@ -1046,8 +1050,8 @@ recLUDecomp ::  (Ord m, Eq a, Fractional a, NFData a)
             ->  Matrix a -- ^ L
             ->  Matrix a -- ^ P
             ->  a        -- ^ d
-            ->  Int      -- ^ Current row
-            ->  Int      -- ^ Total rows
+            ->  Index      -- ^ Current row
+            ->  Index      -- ^ Total rows
             -> Maybe (Matrix a,Matrix a,Matrix a,a)
 recLUDecomp getMagnitude u l p d k n =
     if k > n then Just (u,l,p,d)
@@ -1138,8 +1142,8 @@ recLUDecomp' :: (Ord m, Eq a, Fractional a)
             ->  Matrix a -- ^ Q
             ->  a        -- ^ d
             ->  a        -- ^ e
-            ->  Int      -- ^ Current row
-            ->  Int      -- ^ Total rows
+            ->  Index      -- ^ Current row
+            ->  Index      -- ^ Total rows
             ->  Maybe (Matrix a,Matrix a,Matrix a,Matrix a,a,a)
 recLUDecomp' getMagnitude u l p q d e k n =
     if k > n || u'' ! (k, k) == 0
@@ -1260,7 +1264,7 @@ invert m = let
   in if size /= ncols m then mzero
   else gauss_jordan 1 augmented >>= return . submatrix 1 size (size+1) (2*size)
 
-gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Int -> Matrix a -> maybe (Matrix a)
+gauss_jordan :: (MonadPlus maybe, Eq a, Num a, Fractional a, NFData a) => Index -> Matrix a -> maybe (Matrix a)
 gauss_jordan start m = do
     pivot <- findPivot start m [start .. nrows m]
     (if start < nrows m
@@ -1268,7 +1272,7 @@ gauss_jordan start m = do
      else return . execState ( mapM_ do_jordan $ reverse [1..nrows m])
      ) $ execState (do_gauss start pivot) m
 
-do_gauss :: (Fractional a, Num a, NFData a) => Int -> Int -> State (Matrix a) ()
+do_gauss :: (Fractional a, Num a, NFData a) => Index -> Index -> State (Matrix a) ()
 do_gauss start pivot = do
   State.modify' $ switchRows start pivot
   m <- State.get
@@ -1277,7 +1281,7 @@ do_gauss start pivot = do
   mapM_ (one_rowop start) [start+1 .. rows]
 --  forceMatrixState -- ^ LESSFREQUENTLY
 
-one_rowop :: (Num a, Fractional a, NFData a) => Int -> Int -> State (Matrix a) ()
+one_rowop :: (Num a, Fractional a, NFData a) => Index -> Index -> State (Matrix a) ()
 one_rowop source target = do
   m <- State.get
   let lower = m ! (target,source)
@@ -1296,7 +1300,7 @@ one_rowop source target = do
 -- numerically optimal, but if you care about numerical issues, you
 -- should not be inverting a matrix anyway: use luDecomp instead.
 -- This was originally written for exact Rational arithmetic.
-findPivot :: (MonadPlus maybe, Eq a, Num a) => Int -> Matrix a -> [Int] -> maybe Int
+findPivot :: (MonadPlus maybe, Eq a, Num a) => Index -> Matrix a -> [Index] -> maybe Index
 findPivot _ _ [] = mzero
 findPivot column m (h:t) = if m ! (h,column) /= 0
   -- testing for equality with zero is the million dollar question
@@ -1305,7 +1309,7 @@ findPivot column m (h:t) = if m ! (h,column) /= 0
 
 -- the backwards part is easier because the diagonal should be all
 -- ones now.
-do_jordan :: (Fractional a, Num a, NFData a) => Int -> State (Matrix a) ()
+do_jordan :: (Fractional a, Num a, NFData a) => Index -> State (Matrix a) ()
 do_jordan start = do
   mapM_ (one_rowop start) [1.. pred start]
 --  forceMatrixState -- ^ LESSFREQUENTLY
