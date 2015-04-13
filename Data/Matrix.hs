@@ -1327,7 +1327,10 @@ forceMatrixState = do
 
 invert :: (MonadPlus maybe, Eq a, Fractional a) => Matrix a -> maybe (Matrix a);
 -- gauss_jordan1 m = runST $ gauss_jordan m; -- a unusual case where (.) does not work
-invert m = toMonadPlus $ runST $ runMaybeT $ gauss_jordan1 $ m <|> (identity $ nrows m);
+invert m = let {
+    size = nrows m
+} in if size /= ncols m then mzero
+else toMonadPlus $ runST $ runMaybeT $ gauss_jordan1 $ m <|> identity size;
 
 -- add to library
 toMonadPlus :: (MonadPlus m) => Maybe a -> m a;
